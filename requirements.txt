@@ -1,0 +1,10 @@
+git+https://github.com/KurimuzonAkuma/pyrogram.git@v2.1.34#egg=pyrogram
+tgcrypto
+aiohttp
+pymongo[srv]==4.9.2
+motor==3.6.0
+marshmallow==3.19.0
+umongo==3.1.0
+pyromod==3.0.2
+requests
+psutil==5.9.4
