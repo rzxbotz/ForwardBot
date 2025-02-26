@@ -1,6 +1,7 @@
 import re
 import time
 import asyncio
+import random
 from pyrogram import Client, filters, enums
 from config import CAPTION, User, temp
 from pyrogram.errors import FloodWait
@@ -76,6 +77,11 @@ async def forward(client, message):
                 caption=CAPTION.format(file_name=file_name, file_size=file_size, file_caption=file_caption)
             )
             forwarded_count += 1
+
+            # Add random sleep here (between 2 to 5 seconds)
+            random_sleep_time = random.uniform(2, 5)
+            await asyncio.sleep(random_sleep_time)
+
         except FloodWait as e:
             await message.reply(f"Flood Wait err Wait For {e.value + 1} Sec")
             await asyncio.sleep(e.value + 1)
@@ -122,3 +128,4 @@ def get_size(size):
         i += 1
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
+            
