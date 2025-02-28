@@ -4,24 +4,40 @@ import asyncio
 import random
 from pyrogram import Client, filters, enums
 from config import REGEX_PATTERN, LOG_CHANNEL_ID, temp
-from pyrogram.errors import RPCError
+from pyrogram.errors import RPCError, PeerIdInvalid
 
 @Client.on_message(filters.private & filters.command(["delete"]))
 async def delete_files(client, message):
     try:
-        des_ch = await client.ask(message.from_user.id, "Send me your Channel ID to scan and delete files")
-        chat_id = int(des_ch.text)
+        des_ch = await client.ask(message.from_user.id, "Send me your Channel ID or Username to scan and delete files")
+        chat_id = des_ch.text.strip()
+
+        # Convert username to numeric ID if needed
+        if chat_id.startswith("@") or not chat_id.startswith("-100"):
+            try:
+                chat_info = await client.get_chat(chat_id)
+                chat_id = chat_info.id
+            except Exception as e:
+                return await message.reply(f"❌ Error: Invalid Channel ID or Username\n`{str(e)}`")
+
+        # Ensure bot has access
         channel = await client.get_chat(chat_id)
+
+    except PeerIdInvalid:
+        return await message.reply(
+            "❌ Error: The bot hasn't interacted with this channel before.\n"
+            "Try forwarding a message from the channel to this bot first."
+        )
     except Exception as e:
-        return await message.reply(f"Error while accessing channel\n{str(e)}")
+        return await message.reply(f"❌ Error: Cannot access channel\n`{str(e)}`")
 
     try:
-        last_msg = await client.ask(message.from_user.id, "Send me the last message from the channel\n(You can also send the link to the last message)")
+        last_msg = await client.ask(message.from_user.id, "Send me the last message from the channel (or a link to it)")
         if last_msg.text and not last_msg.forward_date:
             regex = re.compile(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
             match = regex.match(last_msg.text.replace("?single", ""))
             if not match:
-                return await message.reply('Invalid link')
+                return await message.reply('❌ Invalid message link.')
             chat_id = match.group(4)
             last_msg_id = int(match.group(5)) + 1
             if chat_id.isnumeric():
@@ -30,17 +46,17 @@ async def delete_files(client, message):
             last_msg_id = int(last_msg.forward_from_message_id) + 1
             chat_id = last_msg.forward_from_chat.username or last_msg.forward_from_chat.id
     except Exception as e:
-        return await message.reply(f"Error while fetching last message\n{str(e)}")
+        return await message.reply(f"❌ Error: Could not fetch last message\n`{str(e)}`")
 
     first_msg = await client.ask(message.from_user.id, "Enter the ID of the starting message")
-    first_msg_id = 2 if int(first_msg.text) < 2 else int(first_msg.text)
-    
+    first_msg_id = max(2, int(first_msg.text.strip()))
+
     start_time = time.time()
     fetched_count = 0
     deleted_count = 0
     skipped_count = 0
 
-    progress_msg = await message.reply("Starting deletion process...")
+    progress_msg = await message.reply("🗑 Starting deletion process...")
 
     for i in range(first_msg_id, last_msg_id):
         if temp.CANCEL:
@@ -66,7 +82,7 @@ async def delete_files(client, message):
                 deleted_count += 1
 
                 # Log deleted file
-                await client.send_message(LOG_CHANNEL_ID, f"🗑 **Deleted:** {file_name}")
+                await client.send_message(LOG_CHANNEL_ID, f"🗑 **Deleted:** `{file_name}`")
 
                 # Random delay to prevent flood wait
                 await asyncio.sleep(random.uniform(2, 5))
@@ -74,36 +90,36 @@ async def delete_files(client, message):
                 skipped_count += 1
 
                 # Log skipped file
-                await client.send_message(LOG_CHANNEL_ID, f"⏭ **Skipped:** {file_name}")
+                await client.send_message(LOG_CHANNEL_ID, f"⏭ **Skipped:** `{file_name or 'Unknown File'}`")
 
             elapsed_time = int(time.time() - start_time)
-            remaining_files = (last_msg_id - i)
+            remaining_files = last_msg_id - i
 
             try:
                 await progress_msg.edit(
                     f"**Deletion in Progress...**\n\n"
-                    f"📥 Fetched: {fetched_count}\n"
-                    f"🗑 Deleted: {deleted_count}\n"
-                    f"⏭ Skipped: {skipped_count}\n"
-                    f"⏳ Time: {elapsed_time} sec\n"
-                    f"📌 Remaining: {remaining_files}"
+                    f"📥 Fetched: `{fetched_count}`\n"
+                    f"🗑 Deleted: `{deleted_count}`\n"
+                    f"⏭ Skipped: `{skipped_count}`\n"
+                    f"⏳ Time: `{elapsed_time} sec`\n"
+                    f"📌 Remaining: `{remaining_files}`"
                 )
             except RPCError:
-                pass  # Avoid flood wait on edits
+                pass  # Avoid flood wait on frequent updates
 
         except Exception as e:
-            return await message.reply(f"Error at message {i}: {str(e)}")
+            return await message.reply(f"❌ Error at message `{i}`: `{str(e)}`")
 
     total_time = int(time.time() - start_time)
     await progress_msg.edit(
-        f"**Deletion Completed!**\n\n"
-        f"📥 Total Fetched: {fetched_count}\n"
-        f"🗑 Total Deleted: {deleted_count}\n"
-        f"⏭ Total Skipped: {skipped_count}\n"
-        f"⏳ Total Time: {total_time} sec"
+        f"✅ **Deletion Completed!**\n\n"
+        f"📥 Total Fetched: `{fetched_count}`\n"
+        f"🗑 Total Deleted: `{deleted_count}`\n"
+        f"⏭ Total Skipped: `{skipped_count}`\n"
+        f"⏳ Total Time: `{total_time} sec`"
     )
 
 @Client.on_message(filters.private & filters.command(["cancel"]))
 async def cancel_deletion(client, message):
     temp.CANCEL = True
-    await message.reply("Deletion process stopped.")
+    await message.reply("🛑 Deletion process stopped.")
