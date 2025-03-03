@@ -99,7 +99,7 @@ async def forward(client, message):
                 f"⏭️ Skipped (No Episode Format): {skipped_msg}\n"
                 f"⏳ Elapsed Time: {elapsed_minutes} min"
                 )
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
         except Exception as a:
             print("Cant Edit Flood Wait")
             pass
