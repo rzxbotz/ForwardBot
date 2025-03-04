@@ -4,7 +4,7 @@ import asyncio
 import random
 from pyrogram import Client, filters, enums
 from config import REGEX_PATTERN, LOG_CHANNEL_ID, temp, User
-from pyrogram.errors import RPCError, FloodWait
+from pyrogram.errors import RPCError, FloodWait, PeerIdInvalid
 
 @Client.on_message(filters.command(["delete"]) & filters.private)
 async def delete_files(User, message):
@@ -16,12 +16,16 @@ async def delete_files(User, message):
         chat_id = des_ch.text.strip()
 
         # Convert username to numeric ID if needed
-        if chat_id.startswith("@") or not chat_id.startswith("-100"):
-            try:
-                chat_info = await User.get_chat(chat_id)
-                chat_id = chat_info.id
-            except Exception as e:
-                return await message.reply(f"❌ **Invalid Channel ID or Username**\n`{str(e)}`")
+        try:
+            chat_info = await User.get_chat(chat_id)
+            chat_id = chat_info.id  
+        except PeerIdInvalid:
+            return await message.reply(
+                "❌ **Error: The userbot hasn't interacted with this channel before.**\n"
+                "Try **forwarding a message** from the channel to this userbot first."
+            )
+        except Exception as e:
+            return await message.reply(f"❌ **Invalid Channel ID or Username**\n`{str(e)}`")
 
     except Exception as e:
         return await message.reply(f"❌ **Error: Cannot access channel**\n`{str(e)}`")
@@ -46,13 +50,13 @@ async def delete_files(User, message):
             else:
                 try:
                     chat_info = await User.get_chat(chat_part)
-                    chat_id = chat_info.id
+                    chat_id = chat_info.id  
                 except Exception as e:
                     return await message.reply(f"❌ **Could not fetch channel ID**\n`{str(e)}`")
 
         elif last_msg.forward_from_chat and last_msg.forward_from_chat.type == enums.ChatType.CHANNEL:
             last_msg_id = int(last_msg.forward_from_message_id) + 1
-            chat_id = last_msg.forward_from_chat.id
+            chat_id = last_msg.forward_from_chat.id  
 
     except Exception as e:
         return await message.reply(f"❌ **Error: Could not fetch last message**\n`{str(e)}`")
