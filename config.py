@@ -1,3 +1,4 @@
+from pyrogram import Client
 
 API_ID = int(17427408)
 API_HASH = "9699e632de895e7d566c241615a0e637"
@@ -8,3 +9,5 @@ LOG_CHANNEL_ID = "-1001930341741"
 
 class temp(object):
     CANCEL=False
+
+User = Client("Forward-user", session_string=SESSION)
