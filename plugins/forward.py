@@ -3,143 +3,129 @@ import time
 import asyncio
 import random
 from pyrogram import Client, filters, enums
-from config import REGEX_PATTERN, LOG_CHANNEL_ID, temp, User
-from pyrogram.errors import RPCError, FloodWait, PeerIdInvalid
+from config import CAPTION, User, temp
+from pyrogram.errors import FloodWait
 
-@Client.on_message(filters.command(["delete"]) & filters.private)
-async def delete_files(User, message):
+@Client.on_message(filters.private & filters.command(["forward"]))
+async def forward(client, message):
     try:
-        des_ch = await User.ask(
-            message.from_user.id, 
-            "Send me your **Channel ID** or **Username** to scan and delete files."
-        )
-        chat_id = des_ch.text.strip()
-
-        # Convert username to numeric ID if needed
-        try:
-            chat_info = await User.get_chat(chat_id)
-            chat_id = chat_info.id  
-        except PeerIdInvalid:
-            return await message.reply(
-                "❌ **Error: The userbot hasn't interacted with this channel before.**\n"
-                "Try **forwarding a message** from the channel to this userbot first."
-            )
-        except Exception as e:
-            return await message.reply(f"❌ **Invalid Channel ID or Username**\n`{str(e)}`")
-
+        des_ch = await client.ask(message.from_user.id, "Send Me Your Destination Channel ID (Your Database Channel ID)")
+        chat_id = int(des_ch.text)
+        to_channel = await User.get_chat(chat_id)
     except Exception as e:
-        return await message.reply(f"❌ **Error: Cannot access channel**\n`{str(e)}`")
+        return await message.reply(f"Error While Getting Destination Channel\n{str(e)}")
 
     try:
-        last_msg = await User.ask(
-            message.from_user.id, 
-            "Send me the **last message ID** or **a link to it** from the channel."
-        )
-
-        if last_msg.text and not last_msg.forward_date:
-            regex = re.compile(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?([\w\d_]+)/(\d+)$")
-            match = regex.match(last_msg.text.replace("?single", ""))
+        fromid = await client.ask(message.from_user.id, "Forward me the last message from the SOURCE CHANNEL\n(you can also send me the link to last message)")
+        if fromid.text and not fromid.forward_date:
+            regex = re.compile(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
+            match = regex.match(fromid.text.replace("?single", ""))
             if not match:
-                return await message.reply('❌ **Invalid message link format.**')
-
-            chat_part = match.group(4)
+                return await message.reply('Invalid link')
+            chat_id = match.group(4)
             last_msg_id = int(match.group(5)) + 1
-
-            if chat_part.isnumeric():
-                chat_id = int("-100" + chat_part)
-            else:
-                try:
-                    chat_info = await User.get_chat(chat_part)
-                    chat_id = chat_info.id  
-                except Exception as e:
-                    return await message.reply(f"❌ **Could not fetch channel ID**\n`{str(e)}`")
-
-        elif last_msg.forward_from_chat and last_msg.forward_from_chat.type == enums.ChatType.CHANNEL:
-            last_msg_id = int(last_msg.forward_from_message_id) + 1
-            chat_id = last_msg.forward_from_chat.id  
-
+            if chat_id.isnumeric():
+                chat_id = int("-100" + chat_id)
+        elif fromid.forward_from_chat and fromid.forward_from_chat.type == enums.ChatType.CHANNEL:
+            last_msg_id = int(fromid.forward_from_message_id) + 1
+            chat_id = fromid.forward_from_chat.username or fromid.forward_from_chat.id
+        from_channel = await User.get_chat(chat_id)
     except Exception as e:
-        return await message.reply(f"❌ **Error: Could not fetch last message**\n`{str(e)}`")
+        return await message.reply(f"Error While Getting Source Channel\n{str(e)}")
 
-    first_msg = await User.ask(message.from_user.id, "Enter the **ID of the first message** to start scanning.")
-    first_msg_id = max(2, int(first_msg.text.strip()))
-
+    first_msg = await client.ask(message.from_user.id, "**Enter the ID of the starting message to copy**")
+    first_msg_id = 2 if int(first_msg.text) < 2 else int(first_msg.text)
     start_time = time.time()
-    fetched_count = 0
-    deleted_count = 0
-    skipped_count = 0
+    forwarded_count = 0
+    invalid_msg = 0
+    skipped_msg = 0  
 
-    progress_msg = await message.reply("🗑 **Starting deletion process...**")
+    k = await message.reply("Starting Forwarding...")
 
     for i in range(first_msg_id, last_msg_id):
         if temp.CANCEL:
-            break
+            break 
         try:
-            msg = await User.get_messages(chat_id, i)
-            fetched_count += 1
-
-            if not msg.media:
-                skipped_count += 1
+            i_file = await User.get_messages(from_channel.id, i)
+            
+            if not i_file.media:
+                invalid_msg += 1
                 continue
-
+            
             file_name = None
-            if msg.document:
-                file_name = msg.document.file_name
-            elif msg.video:
-                file_name = msg.video.file_name
-            elif msg.audio:
-                file_name = msg.audio.file_name
+            file_size = None
+            file_caption = i_file.caption if i_file.caption else ""
 
-            if file_name and re.search(REGEX_PATTERN, file_name, re.IGNORECASE):
-                retry = 0
-                while retry < 3:
-                    try:
-                        await User.delete_messages(chat_id, msg.id)
-                        deleted_count += 1
+            if i_file.document:
+                file_name = i_file.document.file_name
+                file_size = get_size(i_file.document.file_size)
+            elif i_file.video:
+                file_name = i_file.video.file_name
+                file_size = get_size(i_file.video.file_size)
+            elif i_file.audio:
+                file_name = i_file.audio.file_name
+                file_size = get_size(i_file.audio.file_size)
 
-                        await User.send_message(LOG_CHANNEL_ID, f"🗑 **Deleted:** `{file_name}`")
-                        break  
+            if not file_name or not re.search(r"s\d{1,2}[\.\s]?e[p]?\d{1,2}|season|\bepisode\b", file_name.lower()):
+                skipped_msg += 1
+                continue
+      
+            await User.copy_message(
+                chat_id=to_channel.id,
+                from_chat_id=from_channel.id,
+                message_id=i,
+                caption=CAPTION.format(file_name=file_name, file_size=file_size, file_caption=file_caption)
+            )
+            forwarded_count += 1
 
-                    except FloodWait as e:
-                        retry += 1
-                        wait_time = e.value + random.uniform(1, 5)
-                        await message.reply(f"🚦 **FloodWait detected!** Waiting `{wait_time:.2f} sec`...")
-                        await asyncio.sleep(wait_time)
+            # Add random sleep here (between 2 to 5 seconds)
+            random_sleep_time = random.uniform(2, 5)
+            await asyncio.sleep(random_sleep_time)
 
-                await asyncio.sleep(random.uniform(3, 7))
-
-            else:
-                skipped_count += 1
-                await User.send_message(LOG_CHANNEL_ID, f"⏭ **Skipped:** `{file_name or 'Unknown File'}`")
-
-            elapsed_time = int(time.time() - start_time)
-            remaining_files = last_msg_id - i
-
-            try:
-                await progress_msg.edit(
-                    f"**Deletion in Progress...**\n\n"
-                    f"📥 **Fetched:** `{fetched_count}`\n"
-                    f"🗑 **Deleted:** `{deleted_count}`\n"
-                    f"⏭ **Skipped:** `{skipped_count}`\n"
-                    f"⏳ **Time:** `{elapsed_time} sec`\n"
-                    f"📌 **Remaining:** `{remaining_files}`"
-                )
-            except RPCError:
-                pass  
-
+        except FloodWait as e:
+            await message.reply(f"Flood Wait err Wait For {e.value + 1} Sec")
+            await asyncio.sleep(e.value + 1)
         except Exception as e:
-            return await message.reply(f"❌ **Error at message `{i}`:** `{str(e)}`")
+            print(f"Forwarding Stopped Due to {e}")
+            return await message.reply(f"Forward Stopped at {i}\nCheck Log For More Info")
 
-    total_time = int(time.time() - start_time)
-    await progress_msg.edit(
-        f"✅ **Deletion Completed!**\n\n"
-        f"📥 **Total Fetched:** `{fetched_count}`\n"
-        f"🗑 **Total Deleted:** `{deleted_count}`\n"
-        f"⏭ **Total Skipped:** `{skipped_count}`\n"
-        f"⏳ **Total Time:** `{total_time} sec`"
+        elapsed_time = time.time() - start_time
+        elapsed_minutes = int(elapsed_time // 60)
+        try:
+            await k.edit(
+                f"**Forwarding in progress...**\n\n"
+                f"✅ Forwarded: {forwarded_count}\n"
+                f"❌ Invalid (No Media): {invalid_msg}\n"
+                f"⏭️ Skipped (No Episode Format): {skipped_msg}\n"
+                f"⏳ Elapsed Time: {elapsed_minutes} min"
+                )
+            await asyncio.sleep(2)
+        except Exception as a:
+            print("Cant Edit Flood Wait")
+            pass
+
+    total_time = time.time() - start_time
+    total_minutes = int(total_time // 60)
+    await k.edit(
+        f"**Forwarding Completed!**\n\n"
+        f"✅ Total Forwarded: {forwarded_count}\n"
+        f"❌ Invalid Messages (No Media): {invalid_msg}\n"
+        f"⏭️ Skipped (No Episode Format): {skipped_msg}\n"
+        f"⏳ Total Time: {total_minutes} min"
     )
 
-@Client.on_message(filters.command(["cancel"]) & filters.private)
-async def cancel_deletion(User, message):
+@Client.on_message(filters.private & filters.command(["cancel"]))
+async def fordcancel(bot, message):
     temp.CANCEL = True
-    await message.reply("🛑 **Deletion process stopped.**")
+    await message.reply("Forwarding Stopped")
+
+def get_size(size):
+    """Get size in readable format"""
+    units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
+    size = float(size)
+    i = 0
+    while size >= 1024.0 and i < len(units):
+        i += 1
+        size /= 1024.0
+    return "%.2f %s" % (size, units[i])
+            
