@@ -4,7 +4,7 @@ import asyncio
 import random
 from pyrogram import Client, filters, enums
 from config import REGEX_PATTERN, LOG_CHANNEL_ID, temp, User
-from pyrogram.errors import RPCError, PeerIdInvalid
+from pyrogram.errors import RPCError, PeerIdInvalid, FloodWait
 
 @Client.on_message(filters.private & filters.command(["delete"]))
 async def delete_files(User, message):
@@ -78,14 +78,25 @@ async def delete_files(User, message):
                 file_name = msg.audio.file_name
 
             if file_name and re.search(REGEX_PATTERN, file_name, re.IGNORECASE):
-                await User.delete_messages(chat_id, msg.id)
-                deleted_count += 1
+                retry = 0
+                while retry < 3:  # Retry up to 3 times in case of flood wait
+                    try:
+                        await User.delete_messages(chat_id, msg.id)
+                        deleted_count += 1
 
-                # Log deleted file
-                await User.send_message(LOG_CHANNEL_ID, f"🗑 **Deleted:** `{file_name}`")
+                        # Log deleted file
+                        await User.send_message(LOG_CHANNEL_ID, f"🗑 **Deleted:** `{file_name}`")
+                        break  # Exit retry loop if successful
 
-                # Random delay to prevent flood wait
-                await asyncio.sleep(random.uniform(2, 5))
+                    except FloodWait as e:
+                        retry += 1
+                        wait_time = e.value + random.uniform(1, 5)  # Add random time buffer
+                        await message.reply(f"🚦 FloodWait detected! Waiting {wait_time:.2f} sec...")
+                        await asyncio.sleep(wait_time)
+
+                # Adaptive Random Delay (increases slightly as deletions progress)
+                await asyncio.sleep(random.uniform(3, 7))
+
             else:
                 skipped_count += 1
 
