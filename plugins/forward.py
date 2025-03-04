@@ -3,107 +3,108 @@ import time
 import asyncio
 import random
 from pyrogram import Client, filters, enums
-from config import User, temp, LOG_CHANNEL, DELETE_REGEX
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, PeerIdInvalid
+from config import User, LOG_CHANNEL, DELETE_REGEX, temp  # Add DELETE_REGEX in config
 
-@Client.on_message(filters.private & filters.command(["delete"]))
-async def delete_files(client, message):
+@Client.on_message(filters.command("delete") & filters.private)
+async def start_delete(_, message):
     try:
-        des_ch = await client.ask(message.from_user.id, "Send Me Your Channel ID (The Channel to Delete Files From)")
-        chat_id = int(des_ch.text)
-        target_channel = await User.get_chat(chat_id)
-    except Exception as e:
-        return await message.reply(f"Error While Getting Target Channel\n{str(e)}")
+        ch_msg = await message.chat.ask("Send me the **Channel ID or Username** where I should delete files.")
+        chat_id = ch_msg.text.strip()
 
-    regex_pattern = re.compile(DELETE_REGEX, re.IGNORECASE)
-
-    last_msg = await client.ask(message.from_user.id, "Forward the last message from the CHANNEL (or send a link to it)")
-    if last_msg.text and not last_msg.forward_date:
-        regex = re.compile(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
-        match = regex.match(last_msg.text.replace("?single", ""))
-        if not match:
-            return await message.reply('Invalid link')
-        chat_id = match.group(4)
-        last_msg_id = int(match.group(5)) + 1
         if chat_id.isnumeric():
-            chat_id = int("-100" + chat_id)
-    elif last_msg.forward_from_chat and last_msg.forward_from_chat.type == enums.ChatType.CHANNEL:
-        last_msg_id = int(last_msg.forward_from_message_id) + 1
-        chat_id = last_msg.forward_from_chat.username or last_msg.forward_from_chat.id
+            chat_id = int("-100" + chat_id)  # Convert to Telegram ID format
 
-    first_msg = await client.ask(message.from_user.id, "**Enter the ID of the starting message to check**")
-    first_msg_id = 2 if int(first_msg.text) < 2 else int(first_msg.text)
-    start_time = time.time()
-    deleted_count = 0
-    skipped_count = 0  
-
-    log_message = await message.reply("Starting Deletion...")
-
-    for i in range(first_msg_id, last_msg_id):
-        if temp.CANCEL:
-            break
+        # Ensure the bot interacts with the channel to fix PEER_ID_INVALID
         try:
-            i_msg = await User.get_messages(target_channel.id, i)
+            channel = await User.get_chat(chat_id)
+        except PeerIdInvalid:
+            return await message.reply("❌ **Error:** Unable to fetch the channel. Ensure the bot is in the channel.")
 
-            if not i_msg.media:
-                skipped_count += 1
-                continue
+        regex_pattern = re.compile(DELETE_REGEX, re.IGNORECASE)
+        total_deleted = 0
+        total_skipped = 0
+
+        # Confirm before starting
+        confirm_msg = await message.chat.ask(
+            f"🚨 **Confirm Deletion?**\n\n"
+            f"Channel: `{chat_id}`\n"
+            f"Regex: `{DELETE_REGEX}`\n\n"
+            f"Type `YES` to proceed."
+        )
+        if confirm_msg.text.lower() != "yes":
+            return await message.reply("🚫 **Deletion Cancelled!**")
+
+        k = await message.reply("🔄 **Starting deletion...**")
+
+        # Fetch all messages in the channel
+        async for msg in User.get_chat_history(chat_id):
+            if temp.CANCEL:
+                break
+
+            if not msg.media:
+                continue  # Ignore non-media messages
 
             file_name = None
-
-            if i_msg.document:
-                file_name = i_msg.document.file_name
-            elif i_msg.video:
-                file_name = i_msg.video.file_name
-            elif i_msg.audio:
-                file_name = i_msg.audio.file_name
+            if msg.document:
+                file_name = msg.document.file_name
+            elif msg.video:
+                file_name = msg.video.file_name
+            elif msg.audio:
+                file_name = msg.audio.file_name
 
             if not file_name or not regex_pattern.search(file_name):
-                skipped_count += 1
+                total_skipped += 1
+                log_text = f"⏭️ **Skipped:** `{file_name}`"
+                await User.send_message(LOG_CHANNEL, log_text)
                 continue
 
-            await User.delete_messages(target_channel.id, i)
-            deleted_count += 1
+            try:
+                await msg.delete()
+                total_deleted += 1
+                log_text = f"🗑️ **Deleted:** `{file_name}`"
+                await User.send_message(LOG_CHANNEL, log_text)
 
-            await User.send_message(
-                LOG_CHANNEL,
-                f"🗑 Deleted: {file_name}"
-            )
+                # Random sleep for flood wait handling
+                await asyncio.sleep(random.uniform(2, 5))
 
-            # Add random sleep here (between 2 to 5 seconds)
-            random_sleep_time = random.uniform(2, 5)
-            await asyncio.sleep(random_sleep_time)
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+            except Exception as err:
+                await User.send_message(LOG_CHANNEL, f"⚠️ **Error:** {err}")
 
-        except FloodWait as e:
-            await message.reply(f"Flood Wait Error! Waiting for {e.value + 1} seconds...")
-            await asyncio.sleep(e.value + 1)
-        except Exception as e:
-            print(f"Deletion stopped due to: {e}")
-            return await message.reply(f"Process Stopped at {i}\nCheck Logs for More Info")
+            # Update progress
+            elapsed_time = int(time.time() - temp.START_TIME) // 60
+            try:
+                await k.edit(
+                    f"🗑️ **Deleting Files...**\n\n"
+                    f"✅ Deleted: {total_deleted}\n"
+                    f"⏭️ Skipped: {total_skipped}\n"
+                    f"⏳ Elapsed Time: {elapsed_time} min"
+                )
+            except:
+                pass  # Ignore edit errors (FloodWait)
 
-        elapsed_time = time.time() - start_time
-        elapsed_minutes = int(elapsed_time // 60)
-        try:
-            await log_message.edit(
-                f"**Deletion in Progress...**\n\n"
-                f"🗑 Deleted: {deleted_count}\n"
-                f"⏭️ Skipped: {skipped_count}\n"
-                f"⏳ Elapsed Time: {elapsed_minutes} min"
-            )
-            await asyncio.sleep(2)
-        except Exception:
-            pass
+        await k.edit(
+            f"✅ **Deletion Completed!**\n\n"
+            f"🗑️ Total Deleted: {total_deleted}\n"
+            f"⏭️ Total Skipped: {total_skipped}"
+        )
 
-    total_time = time.time() - start_time
-    total_minutes = int(total_time // 60)
-    await log_message.edit(
-        f"**Deletion Completed!**\n\n"
-        f"🗑 Total Deleted: {deleted_count}\n"
-        f"⏭️ Total Skipped: {skipped_count}\n"
-        f"⏳ Total Time: {total_minutes} min"
-    )
+    except Exception as e:
+        await message.reply(f"❌ **Error:** {e}")
+        await User.send_message(LOG_CHANNEL, f"⚠️ **Error in deletion:** {e}")
 
-@Client.on_message(filters.private & filters.command(["cancel"]))
-async def cancel_deletion(bot, message):
+@Client.on_message(filters.chat(LOG_CHANNEL) & filters.regex(DELETE_REGEX))
+async def delete_upcoming(client, message):
+    """Delete upcoming regex-matching files in the channel."""
+    try:
+        await message.delete()
+        await User.send_message(LOG_CHANNEL, f"🗑️ **Deleted New File:** `{message.caption or 'No Caption'}`")
+    except Exception as e:
+        await User.send_message(LOG_CHANNEL, f"⚠️ **Error Deleting File:** {e}")
+
+@Client.on_message(filters.command("cancel") & filters.private)
+async def cancel_delete(_, message):
     temp.CANCEL = True
-    await message.reply("Deletion Stopped")
+    await message.reply("🚫 **Deletion Stopped!**")
